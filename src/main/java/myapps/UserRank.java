@@ -8,10 +8,7 @@ import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.kafka.common.utils.Bytes;
-import org.apache.kafka.streams.KafkaStreams;
-import org.apache.kafka.streams.StreamsBuilder;
-import org.apache.kafka.streams.StreamsConfig;
-import org.apache.kafka.streams.Topology;
+import org.apache.kafka.streams.*;
 import org.apache.kafka.streams.kstream.*;
 import org.apache.kafka.streams.kstream.internals.WindowedDeserializer;
 import org.apache.kafka.streams.kstream.internals.WindowedSerializer;
@@ -32,36 +29,29 @@ public class UserRank {
         prop.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass());
         prop.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.Double().getClass());
 
-        WindowedSerializer<String> windowedSerializer = new WindowedSerializer<>(new StringSerializer());
-        WindowedDeserializer<String> windowedDeserializer = new WindowedDeserializer<>(new StringDeserializer());
-        Serde<Windowed<String>> windowedSerde = Serdes.serdeFrom(windowedSerializer,windowedDeserializer);
-
         Serde<Tuple> tupleSerde = new TupleSerde();
-
 
 
         // 建立拓扑结构
         final StreamsBuilder builder = new StreamsBuilder();
 
-        // source processor
-        KStream<String, Double> stream = builder.stream("user-rank-input");
-
-        // group
-        KGroupedStream<String, Double> group = stream.groupByKey();
-
 
         // 跨度为10秒的翻转窗口，回收时间为5000秒
-        KTable<Windowed<String>, Tuple> table = group.windowedBy(TimeWindows.of(10_000L).until(5000_000L)).aggregate(
-                () -> new Tuple(),
-                (key, value, aggregate) -> {
-                    aggregate.Count++;
-                    aggregate.Sum += value;
-                    aggregate.Last = value;
-                    aggregate.Max = (aggregate.Max < value) ? value : aggregate.Max;
-                    aggregate.Min = (aggregate.Min > value) ? value : aggregate.Min;
-                    return aggregate;
-                },
-                Materialized.<String, Tuple, WindowStore<Bytes, byte[]>>as("aggregated-table-store").withValueSerde(new TupleSerde())
+        KTable<Windowed<String>, Tuple> table = builder.<String, Double>stream("user-rank-input").
+                groupByKey().
+                windowedBy(TimeWindows.of(10_000L).until(5000_000L)).
+                aggregate(
+                    () -> new Tuple(),
+                    (key, value, aggregate) -> {
+                        aggregate.Count++;
+                        aggregate.Sum += value;
+                        aggregate.Last = value;
+                        aggregate.Max = (aggregate.Max < value) ? value : aggregate.Max;
+                        aggregate.Min = (aggregate.Min > value) ? value : aggregate.Min;
+                        return aggregate;
+                    },
+                Materialized.<String, Tuple, WindowStore<Bytes, byte[]>>as("aggregated-table-store").
+                        withValueSerde(new TupleSerde())
         );
 
         DateFormat dateFormat = new SimpleDateFormat("HH:mm:ss");
@@ -76,7 +66,11 @@ public class UserRank {
                         " last => " + value.Last
                 )
         );
-        table.toStream().to("user-rank-output", Produced.with(windowedSerde, tupleSerde));
+
+        table.toStream().map((KeyValueMapper<Windowed<String>, Tuple, KeyValue<String, Tuple>>) (key, value) -> {
+            value.WindowStart = key.window().start();
+            return new KeyValue<>(key.key(), value);
+        }).to("user-rank-output", Produced.with(Serdes.String(), tupleSerde));
 
         final Topology topology = builder.build();
         System.out.println(topology.describe());

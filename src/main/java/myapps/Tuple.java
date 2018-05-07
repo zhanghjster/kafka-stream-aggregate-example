@@ -6,4 +6,5 @@ public class Tuple {
     public double Max;
     public double Min;
     public double Last;
+    public long WindowStart;
 }
