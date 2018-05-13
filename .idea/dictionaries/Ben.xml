@@ -2,6 +2,7 @@
   <dictionary name="Ben">
     <words>
       <w>deserialized</w>
+      <w>downsample</w>
       <w>serde</w>
       <w>wordcount</w>
     </words>
