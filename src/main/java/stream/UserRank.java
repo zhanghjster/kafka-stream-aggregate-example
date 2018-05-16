@@ -10,6 +10,9 @@ import org.apache.kafka.streams.*;
 import org.apache.kafka.streams.kstream.*;
 import org.apache.kafka.streams.state.WindowStore;
 
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.Properties;
 import java.util.concurrent.CountDownLatch;
 
@@ -18,33 +21,42 @@ public class UserRank {
         // 配置
         Properties prop = new Properties();
         prop.put(StreamsConfig.APPLICATION_ID_CONFIG, "stream-user-pv");
-        prop.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "192.168.99.100:9092");
+        prop.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
         prop.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass());
         prop.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.Double().getClass());
 
-        Serde<Stats> statsSerde = new StatsSerde();
+        Serde<Stats> tupleSerde = new TupleSerde();
 
+
+        // 建立拓扑结构
         final StreamsBuilder builder = new StreamsBuilder();
 
-        KStream<String, Stats> stream = builder.<String, Double>stream("user-rank-input").
+
+        // 跨度为10秒的翻转窗口，回收时间为5000秒
+        KTable<Windowed<String>, Stats> table = builder.<String, Double>stream("user-rank-input").
                 groupByKey().
-                windowedBy(TimeWindows.of(10_000L).until(3600_000L)).
+                windowedBy(TimeWindows.of(10_000L).until(5000_000L)).
                 aggregate(
-                    Stats::new,
+                    () -> new Stats(),
                     (key, value, aggregate) -> {
-                        aggregate.update(value);
                         return aggregate;
                     },
-                    Materialized.<String, Stats, WindowStore<Bytes, byte[]>>as("aggregated-table-store").
-                        withValueSerde(new StatsSerde())
-                ).toStream().map((KeyValueMapper<Windowed<String>, Stats, KeyValue<String, Stats>>) (key, value) -> {
-                    value.caculateAvg();
-                    value.setWindow(new Stats.Window(key.window().start(), key.window().end()));
-                    return new KeyValue<>(key.key(), value);
-                });
+                Materialized.<String, Stats, WindowStore<Bytes, byte[]>>as("aggregated-table-store").
+                        withValueSerde(new TupleSerde())
+        );
 
-        stream.to("user-rank-output", Produced.with(Serdes.String(), statsSerde));
-        stream.foreach((key, value) -> System.out.println(value));
+        DateFormat dateFormat = new SimpleDateFormat("HH:mm:ss");
+
+        // print to stdout
+        table.toStream().foreach((key, value) -> System.out.println(
+                dateFormat.format(new Date(key.window().start()))
+
+                )
+        );
+
+        table.toStream().map((KeyValueMapper<Windowed<String>, Stats, KeyValue<String, Stats>>) (key, value) -> {
+            return new KeyValue<>(key.key(), value);
+        }).to("user-rank-output", Produced.with(Serdes.String(), tupleSerde));
 
         final Topology topology = builder.build();
         System.out.println(topology.describe());
@@ -72,9 +84,9 @@ public class UserRank {
         System.exit(0);
     }
 
-    static public final class StatsSerde extends WrapperSerde<Stats> {
-        public StatsSerde() {
-            super(new JsonSerializer<>(), new JsonDeSerializer<>(Stats.class));
+    static public final class TupleSerde extends WrapperSerde<Stats> {
+        public TupleSerde() {
+            super(new JsonSerializer<Stats>(), new JsonDeSerializer<Stats>(Stats.class));
         }
     }
 

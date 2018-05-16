@@ -1,18 +1,15 @@
-package myapps;
+package stream;
 
-import myapps.Serde.JsonDeSerializer;
-import myapps.Serde.JsonSerializer;
-import myapps.Serde.WrapperSerde;
-import org.apache.kafka.common.metrics.Stat;
+import stream.Serde.JsonDeSerializer;
+import stream.Serde.JsonSerializer;
+import stream.Serde.WrapperSerde;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.utils.Bytes;
 import org.apache.kafka.streams.*;
 import org.apache.kafka.streams.kstream.*;
 import org.apache.kafka.streams.state.WindowStore;
 
-import javax.xml.crypto.Data;
 import java.util.Properties;
-import java.util.TreeMap;
 import java.util.concurrent.CountDownLatch;
 
 public class Downsample {
@@ -26,42 +23,40 @@ public class Downsample {
         prop.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass());
         prop.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, dataPointSerde.getClass());
         prop.put(StreamsConfig.DEFAULT_TIMESTAMP_EXTRACTOR_CLASS_CONFIG, DataPointTimestampExtractor.class);
-        prop.put(StreamsConfig.CACHE_MAX_BYTES_BUFFERING_CONFIG, 0);
+       // prop.put(StreamsConfig.CACHE_MAX_BYTES_BUFFERING_CONFIG, 0);
 
+        final StatsSerde statsSerde = new StatsSerde();
+        final AggregateKeySerde aggregateKeySerde = new AggregateKeySerde();
 
         // 建立拓扑结构
         final StreamsBuilder builder = new StreamsBuilder();
 
-
-        KStream<String, DataPoint> sink = builder.<String, DataPoint>stream("data-point-input").
-                selectKey((key, value) -> {
-                    String newKey = value.getMetric();
-                    if (value.getTags() != null) {
-                        TreeMap tags = new TreeMap(value.getTags());
-                        newKey += tags.toString();
-                    }
-                    return newKey;
-                }).
-                through("data-point-metric-tag-key").
+        KStream<Windowed<AggregateKey>, Stats> stream = builder.<String, DataPoint>stream("data-point-input").
+                selectKey((key, value) -> AggregateKey.with(value)).
+                through("data-point-aggregate-key-repartition", Produced.keySerde(aggregateKeySerde)).
                 groupByKey().
                 windowedBy(TimeWindows.of(10_000L).until(5000_000L)).
                 aggregate(
                         () -> new Stats(),
                         (key, value, aggregate) -> aggregate.update(value),
-                        Materialized.<String, Stats, WindowStore<Bytes, byte[]>>as("data-point-value").withValueSerde(new StatsSerde())
-                ).
-                toStream().
-                map((key, value) -> {
-                    value.caculateAgv();
-                    DataPoint dp = value.getDp();
-                    dp.setValue(value.getCount());
-                    System.out.println("window start "+key.window().start());
-                    dp.setTimestamp(key.window().start());
-                    return KeyValue.pair(key.key(), dp);
-                });
+                        Materialized.<AggregateKey, Stats, WindowStore<Bytes, byte[]>>as("stats-store").
+                                withValueSerde(statsSerde).withKeySerde(aggregateKeySerde)
+                ).toStream();
 
+        // 以data point格式输出到topic
+        stream.map((KeyValueMapper<Windowed<AggregateKey>, Stats, KeyValue<AggregateKey, DataPoint>>) (key, value) -> {
+            DataPoint dataPoint = DataPoint.from(key.key()).withStats(value).withTimestamp(key.window().start()/1000);
+            return KeyValue.pair(key.key(), dataPoint);
+        }).to("data-point-output", Produced.keySerde(aggregateKeySerde));
 
-        sink.to("data-point-output");
+        // 以stats格式输出到topic
+        stream.map((KeyValueMapper<Windowed<AggregateKey>, Stats, KeyValue<AggregateKey, Stats>>) (key, value) -> {
+            value.setWindow(key.window());
+            value.setMetric(key.key().getMetric());
+            value.setTags(key.key().getTags());
+            return KeyValue.pair(key.key(), value);
+        }).to("stats-output", Produced.with(aggregateKeySerde, statsSerde));
+
 
         final Topology topology = builder.build();
         System.out.println(topology.describe());
@@ -98,6 +93,12 @@ public class Downsample {
     static public final class StatsSerde extends WrapperSerde<Stats> {
         public StatsSerde() {
             super(new JsonSerializer<Stats>(), new JsonDeSerializer<Stats>(Stats.class));
+        }
+    }
+
+    static public final class AggregateKeySerde extends WrapperSerde<AggregateKey> {
+        public AggregateKeySerde() {
+            super(new JsonSerializer<>(), new JsonDeSerializer<>(AggregateKey.class));
         }
     }
 }

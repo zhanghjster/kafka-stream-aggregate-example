@@ -1,41 +1,20 @@
 package stream;
 
+import org.apache.kafka.streams.kstream.Window;
+
+import java.util.TreeMap;
+
 public class Stats {
+    private String metric;
+    private TreeMap<String, String> tags;
+    private Window window;
     private long count;
     private double sum;
     private double max;
     private double min;
     private double last;
     private double avg;
-    private Window window;
-
-    private transient boolean minInit;
-
-    Stats() {
-        this.window = new Window();
-        this.minInit = false;
-    }
-
-    void setWindow(Stats.Window window) {
-        this.window = window;
-    }
-
-    public void update(double value) {
-        count++;
-        sum += value;
-        max = (max < value) ? value : max;
-        if (!minInit) {
-            min = value;
-            minInit = true;
-        }
-        min = (min > value) ? value : min;
-
-        last = value;
-    }
-
-    public double getAvg() {
-        return avg;
-    }
+    private transient boolean minSetted;
 
     public long getCount() {
         return count;
@@ -57,43 +36,52 @@ public class Stats {
         return last;
     }
 
-    public void caculateAvg() {
-        if (count>0) {
+    public double getAvg() {
+        return avg;
+    }
+
+    public Stats update(DataPoint value) {
+        count++;
+        double v = value.getValue();
+        sum += v;
+        last = v;
+        max = (max < v) ? v : max;
+        if (!minSetted) {
+            minSetted = true;
+            min = v;
+        } else {
+            min = (min > v) ? v : min;
+        }
+        if (count > 0) {
             avg = sum/count;
         }
+
+        return this;
+    }
+
+    public String getMetric() {
+        return metric;
+    }
+
+    public void setMetric(String metric) {
+        this.metric = metric;
+    }
+
+    public TreeMap<String, String> getTags() {
+        return tags;
+    }
+
+    public void setTags(TreeMap<String, String> tags) {
+        this.tags = tags;
     }
 
     public Window getWindow() {
+
         return window;
     }
 
-    static class Window {
-        private Long startMs;
-        private Long endMs;
-
-        Window() {
-
-        }
-        Window(long start, long end) {
-            this.startMs = start;
-            this.endMs = end;
-        }
-
-        public String toString() {
-            return "window[start=" + startMs + ", end=" + endMs + "]";
-        }
-    }
-
-    public String toString() {
-        return "stats[" +
-                "count=" + count +
-                ", sum=" + sum +
-                ", max=" + max +
-                ", min=" + min +
-                ", last=" + last +
-                ", avg=" + avg +
-                ", widow=" + window +
-                "]";
+    public void setWindow(Window window) {
+        this.window = window;
     }
 
 }
