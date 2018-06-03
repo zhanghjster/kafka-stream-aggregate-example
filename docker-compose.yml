@@ -1,0 +1,81 @@
+version: "2"
+services: 
+    zookeeper: 
+        image: confluentinc/cp-zookeeper
+        container_name: zookeeper
+        environment:
+            - ZOOKEEPER_CLIENT_PORT=2181
+            - ZOOKEEPER_TICK_TIME=2000
+        ports:
+            - "2181:2181"
+        networks:
+            - connect
+    kafka:
+        image: confluentinc/cp-kafka
+        container_name: kafka
+        environment:
+            - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
+            - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+            - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+        ports:
+            - "9092:9092"
+        depends_on:
+            - zookeeper
+        networks:
+            - connect
+    schema-registry:
+        image: confluentinc/cp-schema-registry
+        container_name: schema-registry
+        environment:
+            - SCHEMA_REGISTRY_KAFKASTORE_CONNECTION_URL=zookeeper:2181
+            - SCHEMA_REGISTRY_HOST_NAME=schema-registry
+            - SCHEMA_REGISTRY_LISTENERS=http://0.0.0.0:8081  
+        networks:
+            - connect
+    control-center:
+        image: confluentinc/cp-enterprise-control-center
+        container_name: controler_center
+        ports:
+            - "9021:9021"
+        depends_on:
+            - kafka
+        environment:
+            - CONTROL_CENTER_ZOOKEEPER_CONNECT=zookeeper:2181
+            - CONTROL_CENTER_BOOTSTRAP_SERVERS=kafka:9092
+            - CONTROL_CENTER_REPLICATION_FACTOR=1
+            - CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_PARTITIONS=1
+            - CONTROL_CENTER_INTERNAL_TOPICS_PARTITIONS=1
+            - CONTROL_CENTER_STREAMS_NUM_STREAM_THREADS=2
+            - CONTROL_CENTER_CONNECT_CLUSTER=http://kafka-connect:8082
+        networks:
+            - connect
+    mysql:
+        image: debezium/example-mysql:0.7
+        container_name: mysql
+        ports:
+            - "3306:3306"
+        environment:
+            - MYSQL_ROOT_PASSWORD=debezuim
+            - MYSQL_USER=mysqluser
+            - MYSQL_USER_PASSWORD=mysqlpw
+        depends_on:
+            - kafka
+        networks:
+            - connect
+    connect:
+        image: debezium/connect:0.7
+        container_name: connect
+        ports:
+            - "8083:8083"
+        depends_on:
+            - kafka
+        environment:
+            - GROUP_ID=1
+            - CONFIG_STORAGE_TOPIC=my_connect_configs
+            - OFFSET_STORAGE_TOPIC=my_connect_offsets
+            - BOOTSTRAP_SERVERS=kafka:9092
+        networks:
+            - connect
+networks:
+    connect:
+        driver: bridge
