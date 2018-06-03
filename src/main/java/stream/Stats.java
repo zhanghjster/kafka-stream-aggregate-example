@@ -1,7 +1,5 @@
 package stream;
 
-import org.apache.kafka.streams.kstream.Window;
-
 import java.util.TreeMap;
 
 public class Stats {
@@ -76,7 +74,6 @@ public class Stats {
     }
 
     public Window getWindow() {
-
         return window;
     }
 
